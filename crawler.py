@@ -130,17 +130,26 @@ def extract_neurips_main_html():
             recommendation = span[0].parent.previous_sibling.previous_sibling.text
             paper_res['meta_review'] = recommendation + "\n" + confidence + "\n" + meta_review if meta_review else None
 
+            # div with class "note panel" whose first child with text "Official Review of Paper"
+            reviewers_res = []
+            reviewers = [s for s in paper_soup.find_all('div', {'class': 'note panel'}) if s.text.strip().startswith(
+                "Official Review of Paper")]
+            # combine all text in div with class "note_contents"
+            for r in reviewers:
+                review = '\n'.join([rr.text.strip() for rr in r.find_all('div', {'class': 'note_contents'}) if rr.text.strip() != 'Official Review of Paper'])
+                reviewers_res.append(review)
+            paper_res['reviews'] = reviewers_res
             res[title] = paper_res
 
     extract_paper_info(accepted_papers, is_accepted=True)
     extract_paper_info(rejected_papers, is_accepted=False)
     #     save res
-    with open(cache_folder / "NeurIPS2022.json", 'w') as f:
+    with open(cache_folder / "_NeurIPS2022.json", 'w') as f:
         json.dump(res, f, indent=4)
 
 
 if __name__ == '__main__':
-    driver = get_driver(headless=False)
+    # driver = get_driver(headless=False)
     cache_folder = Path("cache")
     cache_folder.mkdir(exist_ok=True)
     # get_neurips_main_html()
