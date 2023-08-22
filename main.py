@@ -151,17 +151,36 @@ def generate_meta_from_pdf(model_name='gpt-4'):
         #     rounds.append({"question": question, "answer": result["result"]})
 
 
-def generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k'):
+def generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.9):
     """
     Use GPT to generate the summary (meta review) from other human reviews
     :param model_name: OpenAI model name
     :return: generated meta review
     """
-    prompt_template = """Please act as a meta reviewer to give the final metareview based on reviews from other reviewers. Feel free to express the possible opinions.
-    "{text}"
-    The output format should be:
-    "Recommendation: [Reject/Accept]\nConfidence:[Certain/Less Certain]\nMeta Review: [Your review]"
-    """
+
+    src_path = Path('cache') / 'raw.json'
+    dst_path = Path('cache') / 'gen_{}_{}.json'.format(model_name, strictness)
+
+    assert src_path.exists()
+    res = json.load(src_path.open())
+
+    assert 0 <= strictness <= 1, "Strictness should be a float number between 0 and 1, higher is stricter."
+
+    prompt_template = f"""
+    Please act as a meta reviewer to give the final metareview based on reviews from other reviewers.
+    The strictness for this conference is {strictness}, which is a float number between 0 and 1, higher is stricter.
+    You should tend to reject a paper if the strictness is higher, and tend to accept a paper if the strictness is lower.
+    Feel free to express the possible opinions. 
+    """ + \
+                      """
+                        [The Start of Human Meta Review]
+                      "{text}"
+                        [The End of Human Meta Review]
+                      
+                      The output format should be:
+                      "Recommendation: [Reject/Accept]\nConfidence:[Certain/Less Certain]\nMeta Review: [Your review]"
+                      (Note there is no "weak" or "borderline" recommendation.)
+                      """
     prompt = PromptTemplate.from_template(prompt_template)
 
     llm = ChatOpenAI(temperature=0, model_name=model_name)
@@ -170,22 +189,15 @@ def generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k'):
         llm_chain=llm_chain, document_variable_name="text"
     )
 
-    # prepare other reviews as plain text
-    res_path = Path('cache') / 'NeurIPS2022.json'
-    assert res_path.exists()
-    res = json.load(res_path.open())
-
     for paper_name, v in tqdm(res.items(), total=len(res.keys())):
         reviews = v['reviews']
-        text = ''
-        for idx, r in enumerate(reviews):
-            text += 'Reviewer ' + str(idx + 1) + ': ' + r + '\n\n'
+        text = '\n'.join(reviews)
         docs = [Document(page_content=text, metadata={})]
         summary = stuff_chain.run(docs)
-        res[paper_name]['ai_sum_meta'] = summary
+        res[paper_name][f'ai_meta_({model_name})'] = summary
         print(summary)
 
-        with open(res_path, 'w') as f:
+        with open(dst_path, 'w') as f:
             json.dump(res, f, indent=4)
 
 
@@ -278,17 +290,21 @@ def ai_judge(col):
         json.dump(res, f, indent=4)
 
 
-def user_study():
+def analysis(name):
     """
     Summarize the generated AI reviews with the real meta review and user study opinions
     :return:
     """
 
-    res_path = Path('cache') / 'NeurIPS2022.json'
-    assert res_path.exists()
-    res = json.load(res_path.open())
+    src_path = Path('cache') / name
+    dst_path = Path('cache') / 'analysis_{}.xlsx'.format(src_path.stem)
 
-    columns = ['Human meta review', 'Human meta decision',
+    assert src_path.exists()
+    res = json.load(src_path.open())
+
+    raw = json.load(Path('cache/raw.json').open())
+
+    columns = ['Paper', 'Human meta review', 'Human meta decision',
                'AI meta', 'AI meta decision', 'AI judge',
                "R1", "R2", "R3", "R4", "R5", "R6"]
     df = pd.DataFrame(columns=columns)
@@ -298,9 +314,6 @@ def user_study():
 
     max_nb = 0
     for paper in res.items():
-        reviews = ""
-        for idx_review, review in enumerate(paper[1]['reviews']):
-            reviews += 'Reviewer ' + str(idx_review + 1) + ': \n' + review + '\n================\n\n\n'
         ai_meta_decision = paper[1]['ai_sum_meta'].strip().split('\n')[0].split(': ')[1].strip()
         ai_meta_decision = 'Accept' if 'accept' in ai_meta_decision.lower() else ai_meta_decision
         ai_meta_decision = 'Reject' if 'reject' in ai_meta_decision.lower() else ai_meta_decision
@@ -310,10 +323,22 @@ def user_study():
         human_meta_decision = 'Reject' if 'reject' in human_meta_decision.lower() else human_meta_decision
         assert human_meta_decision in ['Accept', 'Reject']
 
+        paper_info = \
+            (f"Title: {paper[0]}\n"
+             f"Paper ID: {paper[1]['paper_id']}\n"
+             f"Paper URL: {raw[paper[0]]['pub_url']}\n"
+             f"PDF URL: {paper[1]['pdf_link']}\n"
+             f"Avg_rating: {raw[paper[0]]['rating_avg']}\n"
+             f"Avg_confidence: {raw[paper[0]]['confidence_avg']}\n"
+             f"Avg_soundness: {raw[paper[0]]['soundness_avg']}\n"
+             f"Avg_presentation: {raw[paper[0]]['presentation_avg']}\n"
+             f"Avg_contribution: {raw[paper[0]]['contribution_avg']}\n")
+
         if len(paper[1]['reviews']) > max_nb:
             max_nb = len(paper[1]['reviews'])
         df_new = pd.DataFrame(
             {
+                'Paper': paper_info,
                 'Human meta review': paper[1]['meta_review'],
                 'Human meta decision': human_meta_decision,
                 'AI meta': paper[1]['ai_sum_meta'],
@@ -330,7 +355,7 @@ def user_study():
         df = pd.concat([df, df_new])
         human_meta_decisions.append(human_meta_decision)
         ai_meta_decisions.append(ai_meta_decision)
-    df.to_excel('cache/NeurIPS2022.xlsx', index=False)
+    df.to_excel(dst_path, index=False)
 
     # compute the accuracy
     acc = sum([1 if x == y else 0 for x, y in zip(human_meta_decisions, ai_meta_decisions)]) / len(human_meta_decisions)
@@ -348,6 +373,9 @@ def user_study():
 
 if __name__ == '__main__':
     # generate_meta_from_pdf()
-    # generate_meta_from_reviews()
+    # generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.8)
+
     # ai_judge(col='ai_sum_meta')
-    user_study()
+
+    analysis(name='gen_gpt-3.5-turbo-16k.json')
+    # analysis(name='gen_gpt-3.5-turbo-16k_0.8.json')
