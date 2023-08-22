@@ -11,6 +11,8 @@ import dataclasses
 import re
 from tqdm import tqdm
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 from langchain.document_loaders import TextLoader
 from langchain.docstore.document import Document
@@ -310,7 +312,9 @@ def analysis(name):
     df = pd.DataFrame(columns=columns)
 
     human_meta_decisions = []
+    human_meta_scores = []
     ai_meta_decisions = []
+    ai_meta_scores = []
 
     max_nb = 0
     for paper in res.items():
@@ -354,7 +358,9 @@ def analysis(name):
             index=[paper[0]])
         df = pd.concat([df, df_new])
         human_meta_decisions.append(human_meta_decision)
+        human_meta_scores.append(raw[paper[0]]['rating_avg'])
         ai_meta_decisions.append(ai_meta_decision)
+
     df.to_excel(dst_path, index=False)
 
     # compute the accuracy
@@ -370,6 +376,62 @@ def analysis(name):
     print('Accuracy of Accept: {}'.format(acc_accept))
     print('Accuracy of Reject: {}'.format(acc_reject))
 
+    # make a histogram, ranging score from 0 to 10, check whether the AI judge is similar to the human judge
+    human_score2decision = zip(human_meta_scores, human_meta_decisions)
+    human_score2decision = sorted(human_score2decision, key=lambda x: x[0])
+    human_score2decision = list(human_score2decision)
+    ai_score2decision = zip(human_meta_scores, ai_meta_decisions)
+    ai_score2decision = sorted(ai_score2decision, key=lambda x: x[0])
+    ai_score2decision = list(ai_score2decision)
+    import matplotlib.pyplot as plt
+
+    decisions = ['Accept', 'Reject']
+
+    import matplotlib.pyplot as plt
+
+    decisions = ['Accept', 'Reject']
+    colors = ['tab:blue', 'tab:orange']
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy import stats
+
+    decisions = ['Accept', 'Reject']
+    colors = ['tab:blue', 'tab:orange']
+
+    for decision, color in zip(decisions, colors):
+        human_scores = np.array([x[0] for x in human_score2decision if x[1] == decision])
+        ai_scores = np.array([x[0] for x in ai_score2decision if x[1] == decision])
+
+        # Calculate mean and confidence interval for each group
+        ai_mean = np.mean(ai_scores)
+        ai_ci = stats.norm.interval(0.95, loc=ai_mean, scale=stats.sem(ai_scores))
+
+        human_mean = np.mean(human_scores)
+        human_ci = stats.norm.interval(0.95, loc=human_mean, scale=stats.sem(human_scores))
+
+        # Create the histogram with bins of width 0.3
+        bins = np.arange(0, 11.3, 0.3)  # Bins from 0.0 to 11.0 with 0.3 intervals
+
+        plt.hist(ai_scores, bins=bins, alpha=0.3, color=color, label='AI', density=True)
+        plt.hist(human_scores, bins=bins, alpha=0.3, color='gray', label='Human', density=True, hatch='//')
+
+        plt.axvline(ai_mean, color=color, linestyle='dashed', linewidth=1)
+        plt.axvline(human_mean, color='gray', linestyle='dashed', linewidth=1)
+
+        plt.text(ai_mean - 0.2, 0.7, f'{ai_mean:.2f}  \n[{ai_ci[0]:.2f}, {ai_ci[1]:.2f}]  ', color=color, ha='right')
+        plt.text(human_mean + 0.2, 0.7, f'{human_mean:.1f}  \n[{human_ci[0]:.2f}, {human_ci[1]:.2f}]  ', color='gray')
+
+        plt.legend(loc='upper right')
+        plt.title(f'Histogram of {decision} Score')
+        plt.xlabel('Reviewer Average Score')
+        plt.ylabel('Density')
+
+        # Save and display the histogram
+        plt.savefig(dst_path.parent / f'histogram_{decision}_{src_path.stem}.png', dpi=300, bbox_inches='tight')
+        plt.show()
+
+        print()
 
 if __name__ == '__main__':
     # generate_meta_from_pdf()
