@@ -103,6 +103,7 @@ def extract_neurips_main_html():
 
             paper_res = {
                 'link': link,
+                'pub_url': 'https://openreview.net/forum?id={}'.format(paper_id),
                 'pdf_link': pdf_link,
                 'paper_id': paper_id,
                 'title': title,
@@ -131,20 +132,29 @@ def extract_neurips_main_html():
             paper_res['meta_review'] = recommendation + "\n" + confidence + "\n" + meta_review if meta_review else None
 
             # div with class "note panel" whose first child with text "Official Review of Paper"
-            reviewers_res = []
+
             reviewers = [s for s in paper_soup.find_all('div', {'class': 'note panel'}) if s.text.strip().startswith(
                 "Official Review of Paper")]
-            # combine all text in div with class "note_contents"
-            for r in reviewers:
+            reviewers_parsed = [[{x.text.replace(': ', '').strip(): x.next_sibling.text.strip()} for x in r.find_all('span', {'class': 'note_content_field'})] for r in reviewers]
+            reviewers_parsed = [{k: v for d in r for k, v in d.items()} for r in reviewers_parsed]
+            reviewers_text = []
+            for idx_r, r in enumerate(reviewers):
                 review = '\n'.join([rr.text.strip() for rr in r.find_all('div', {'class': 'note_contents'}) if rr.text.strip() != 'Official Review of Paper'])
-                reviewers_res.append(review)
-            paper_res['reviews'] = reviewers_res
+                review = 'Reviewer {}: \n'.format(idx_r + 1) + review + '\n\n'
+                reviewers_text.append(review)
+            paper_res['reviews'] = reviewers_text
+            paper_res['reviews_parsed'] = reviewers_parsed
+            paper_res['rating_avg'] = round(sum([float(x['Rating'].split(':')[0]) for x in reviewers_parsed]) / len(reviewers_parsed), 3) if len(reviewers_parsed) > 0 else None
+            paper_res['confidence_avg'] = round(sum([float(x['Confidence'].split(':')[0]) for x in reviewers_parsed]) / len(reviewers_parsed), 3) if len(reviewers_parsed) > 0 else None
+            paper_res['soundness_avg'] = round(sum([float(x['Soundness'].split(':')[0].split(' ')[0]) for x in reviewers_parsed]) / len(reviewers_parsed), 3) if len(reviewers_parsed) > 0 else None
+            paper_res['presentation_avg'] = round(sum([float(x['Presentation'].split(':')[0].split(' ')[0]) for x in reviewers_parsed]) / len(reviewers_parsed), 3) if len(reviewers_parsed) > 0 else None
+            paper_res['contribution_avg'] = round(sum([float(x['Contribution'].split(':')[0].split(' ')[0]) for x in reviewers_parsed]) / len(reviewers_parsed), 3) if len(reviewers_parsed) > 0 else None
             res[title] = paper_res
 
     extract_paper_info(accepted_papers, is_accepted=True)
     extract_paper_info(rejected_papers, is_accepted=False)
     #     save res
-    with open(cache_folder / "_NeurIPS2022.json", 'w') as f:
+    with open(cache_folder / "raw.json", 'w') as f:
         json.dump(res, f, indent=4)
 
 
