@@ -11,27 +11,24 @@ import dataclasses
 import re
 from tqdm import tqdm
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
 
+from langchain.document_loaders import TextLoader
+from langchain.docstore.document import Document
 from langchain.document_loaders.pdf import UnstructuredPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 
 from langchain.llms import OpenAI
+from langchain.chains.llm import LLMChain
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain import PromptTemplate
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-)
-
-two_score_pattern = re.compile("\[\[(\d+\.?\d*),\s?(\d+\.?\d*)\]\]")
-two_score_pattern_backup = re.compile("\[(\d+\.?\d*),\s?(\d+\.?\d*)\]")
-one_score_pattern = re.compile("\[\[(\d+\.?\d*)\]\]")
-one_score_pattern_backup = re.compile("\[(\d+\.?\d*)\]")
+from langchain.chains.summarize import load_summarize_chain
+from langchain.chains.combine_documents.stuff import StuffDocumentsChain
 
 API_MAX_RETRY = 16
 API_RETRY_SLEEP = 10
@@ -80,7 +77,7 @@ def pdf_retriever(pdf_path, embedding_function=OpenAIEmbeddings()):
     return retriever
 
 
-def generate_review(model_name='gpt-4'):
+def generate_meta_from_pdf(model_name='gpt-4'):
     """
     Using GPT-4 to generate the review based on paper PDF
     :param model_name:
@@ -147,14 +144,93 @@ def generate_review(model_name='gpt-4'):
         ]
     with open('cache/NeurIPS2022.json', 'w') as f:
         json.dump(res, f, indent=4)
-        # rounds = []
-        # for question in questions:
-        #     result = qa(question)
-        #     # source = result["source_documents"]
-        #     print(f"-> **Question**: {question} \n")
-        #     print(f"**Answer**: {result['result']} \n")
-        #     # add question and answer to the file
-        #     rounds.append({"question": question, "answer": result["result"]})
+
+
+def generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=None, confidence=None, score=True):
+    """
+    Use GPT to generate the summary (meta review) from other human reviews
+    :param model_name: OpenAI model name
+    :param strictness: float number between 0 and 1, higher is stricter
+    :param confidence: 'Certain' or 'Less Certain'
+    :param score: whether to use include the score of reviewers, for ablation study
+    :return: generated meta review
+    """
+
+    src_path = Path('cache') / 'raw.json'
+    dst_path = Path('cache') / 'gen_{}.json'.format(model_name)
+
+    assert src_path.exists()
+    res = json.load(src_path.open())
+
+    # filtering existed
+    accept_folder = list((Path('cache') / 'accepted').glob('*.pdf'))
+    reject_folder = list((Path('cache') / 'rejected').glob('*.pdf'))
+    names_existed = [x.stem for x in accept_folder + reject_folder]
+    res = {k: v for k, v in res.items() if k in names_existed}
+
+    prompt_template = "Please act as a meta reviewer to give the final metareview based on reviews from other reviewers."
+
+    if strictness != None:
+        assert 0 <= strictness <= 1, "Strictness should be a float number between 0 and 1, higher is stricter."
+        strictness_words = (
+            f"The strictness for this conference is {strictness}, which is a float number between 0 and 1, higher is stricter."
+            "You should tend to reject a paper if the strictness is higher, and tend to accept a paper if the strictness is lower.")
+        prompt_template += strictness_words
+        dst_path = dst_path.parent / (dst_path.stem + '_strictness_{}.json'.format(strictness))
+
+    if confidence is not None and confidence.lower() == 'certain':
+        confidence_words = f"""Your confidence for this conference is "{confidence}", you should be more confident to give a final decision."""
+        prompt_template += confidence_words
+        dst_path = dst_path.parent / (dst_path.stem + '_confidence_{}.json'.format(confidence))
+
+    if not score:
+        dst_path = dst_path.parent / (dst_path.stem + '_NoScore.json')
+
+    prompt_template += """
+      Feel free to express the possible opinions.
+      
+        [The Start of Human Reviews]
+        "{text}"
+        [The End of Human Reviews]
+        
+      """
+
+    prompt_template += f"""
+    The output format should be:
+      "Recommendation: [Reject/Accept]
+      Confidence:{"[Certain/Less Certain]" if confidence is None else "Certain"}
+      Meta Review: [Your review]"
+      
+      (Note there is no "weak" or "borderline" recommendation.)
+      """
+
+    prompt = PromptTemplate.from_template(prompt_template)
+
+    llm = ChatOpenAI(temperature=0, model_name=model_name)
+    llm_chain = LLMChain(llm=llm, prompt=prompt)
+    stuff_chain = StuffDocumentsChain(
+        llm_chain=llm_chain, document_variable_name="text"
+    )
+
+    for paper_name, v in tqdm(res.items(), total=len(res.keys())):
+        reviews = v['reviews']
+        if not score:
+            new_reviews = []
+            for r in reviews:
+                new_reviews.append(
+                    r.split('Rating:')[0].strip() + '\nConfidence:' + r.split('Confidence:')[1].strip()
+                )
+            reviews = new_reviews
+        text = '\n'.join(reviews)
+        docs = [Document(page_content=text, metadata={})]
+        summary = stuff_chain.run(docs)
+        res[paper_name][f'ai_sum_meta'] = summary
+        print(summary)
+
+        with open(dst_path, 'w') as f:
+            json.dump(res, f, indent=4)
+
+    print('Saved to {}'.format(dst_path.name))
 
 
 def _chatgpt(
@@ -201,7 +277,12 @@ def _chatgpt(
     return res
 
 
-def ai_judge():
+def ai_judge(col):
+    """
+    Using GPT to judge whether the generated meta review is similar to the real human meta review
+    :param col: column name of the generated meta review
+    :return: None
+    """
     res_path = Path('cache') / 'NeurIPS2022.json'
     assert res_path.exists()
     res = json.load(res_path.open())
@@ -216,15 +297,16 @@ def ai_judge():
         "Strictly following this format: Similarity Score: [score] \n Explanation: [explaination] \n\n"
     )
 
-    prompt_template = ("[User Question]\n{question}\n\n[The Start of Human Meta Review]\n{answer_a}\n[The End of Human Meta Review]\n\n[The Start of AI Meta Review]\n{answer_b}\n[The End of AI Meta Review]\n"
-                       "Give a similarity score from 0 to 10: final recommendations (acceptance or rejection) is the most important factor, weighting 5 to 7. But confidence, content and explanation are less important, weighting 1 to 2. "
-                       "For example, the score should be over 5 if the two have the same recommendation, but not over 5 if they are different. Do not be too strict."
-                       )
+    prompt_template = (
+        "[User Question]\n{question}\n\n[The Start of Human Meta Review]\n{answer_a}\n[The End of Human Meta Review]\n\n[The Start of AI Meta Review]\n{answer_b}\n[The End of AI Meta Review]\n"
+        "Give a similarity score from 0 to 10: final recommendations (acceptance or rejection) is the most important factor, weighting 5 to 7. But confidence, content and explanation are less important, weighting 1 to 2. "
+        "For example, the score should be over 5 if the two have the same recommendation, but not over 5 if they are different. Do not be too strict."
+    )
 
     for k, v in res.items():
         user_prompt = prompt_template.format(
             question="What is the estimated similarity score of the AI reviewer's review to the human reviewer's review?",
-            answer_a=v['meta_review'], answer_b=v['ai_meta_review'])
+            answer_a=v['meta_review'], answer_b=v[col])
 
         # if not v['ai_meta_review'].startswith("The paper demonstrates strong theoretical"):
         #     continue
@@ -234,40 +316,149 @@ def ai_judge():
         print('*' * 20)
         print(ai_message)
         print('*' * 20)
-        res[k]['ai_judge'] = ai_message
+        res[k]['judge_{}'.format(col)] = ai_message
 
     with open(res_path, 'w') as f:
         json.dump(res, f, indent=4)
 
 
-def generate_human_review():
-    res_path = Path('cache') / 'NeurIPS2022.json'
-    assert res_path.exists()
-    res = json.load(res_path.open())
+def analysis(name):
+    """
+    Summarize the generated AI reviews with the real meta review and user study opinions
+    :return:
+    """
 
-    accepts = {k: v for k, v in res.items() if v['is_accepted'] == True}
-    accepts_select_10 = random.sample(list(accepts.items()), 10)
-    rejects = {k: v for k, v in res.items() if v['is_accepted'] == False}
-    rejects_select_10 = random.sample(list(rejects.items()), 10)
+    src_path = Path('cache') / name
+    dst_path = Path('cache') / 'analysis_{}.xlsx'.format(src_path.stem)
 
-    # generate dataframe with columns ['Human meta review', 'AI meta review', 'AI judge', "Xi's decision", "Chuan's decision"], leave the last two columns empty
-    to_use = accepts_select_10 + rejects_select_10
-    df = pd.DataFrame(columns=['Human meta review', 'AI meta review', 'AI judge', "Xi's decision", "Chuan's decision"])
-    for paper in to_use:
-        df_new = pd.DataFrame({'Human meta review': paper[1]['meta_review'],
-                               'AI meta review': paper[1]['ai_meta_review'],
-                               'AI judge': paper[1]['ai_judge'],
-                               "Xi's decision": "",
-                               "Chuan's decision": ""}, index=[paper[0]])
+    assert src_path.exists()
+    res = json.load(src_path.open())
+
+    raw = json.load(Path('cache/raw.json').open())
+
+    columns = ['Paper', 'Human meta review', 'Human meta decision',
+               'AI meta', 'AI meta decision', 'AI judge',
+               "R1", "R2", "R3", "R4", "R5", "R6"]
+    df = pd.DataFrame(columns=columns)
+
+    human_meta_decisions = []
+    ai_meta_decisions = []
+
+    human_avg_scores = []
+
+    max_nb = 0
+    for paper in res.items():
+        ai_meta_decision = paper[1]['ai_sum_meta'].strip().split('\n')[0].split(': ')[1].strip()
+        ai_meta_decision = 'Accept' if 'accept' in ai_meta_decision.lower() else ai_meta_decision
+        ai_meta_decision = 'Reject' if 'reject' in ai_meta_decision.lower() else ai_meta_decision
+        assert ai_meta_decision in ['Accept', 'Reject']
+        human_meta_decision = paper[1]['meta_review'].strip().split('\n')[0].split(': ')[1].strip()
+        human_meta_decision = 'Accept' if 'accept' in human_meta_decision.lower() else human_meta_decision
+        human_meta_decision = 'Reject' if 'reject' in human_meta_decision.lower() else human_meta_decision
+        assert human_meta_decision in ['Accept', 'Reject']
+
+        paper_info = \
+            (f"Title: {paper[0]}\n"
+             f"Paper ID: {paper[1]['paper_id']}\n"
+             f"Paper URL: {raw[paper[0]]['pub_url']}\n"
+             f"PDF URL: {paper[1]['pdf_link']}\n"
+             f"Avg_rating: {raw[paper[0]]['rating_avg']}\n"
+             f"Avg_confidence: {raw[paper[0]]['confidence_avg']}\n"
+             f"Avg_soundness: {raw[paper[0]]['soundness_avg']}\n"
+             f"Avg_presentation: {raw[paper[0]]['presentation_avg']}\n"
+             f"Avg_contribution: {raw[paper[0]]['contribution_avg']}\n")
+
+        if len(paper[1]['reviews']) > max_nb:
+            max_nb = len(paper[1]['reviews'])
+        df_new = pd.DataFrame(
+            {
+                'Paper': paper_info,
+                'Human meta review': paper[1]['meta_review'],
+                'Human meta decision': human_meta_decision,
+                'AI meta': paper[1]['ai_sum_meta'],
+                'AI meta decision': ai_meta_decision,
+                # 'AI judge': paper[1]['judge_ai_sum_meta'],
+                "R1": paper[1]['reviews'][0] if len(paper[1]['reviews']) > 0 else "",
+                "R2": paper[1]['reviews'][1] if len(paper[1]['reviews']) > 1 else "",
+                "R3": paper[1]['reviews'][2] if len(paper[1]['reviews']) > 2 else "",
+                "R4": paper[1]['reviews'][3] if len(paper[1]['reviews']) > 3 else "",
+                "R5": paper[1]['reviews'][4] if len(paper[1]['reviews']) > 4 else "",
+                "R6": paper[1]['reviews'][5] if len(paper[1]['reviews']) > 5 else "",
+            },
+            index=[paper[0]])
         df = pd.concat([df, df_new])
-    print()
+        human_meta_decisions.append(human_meta_decision)
+        human_avg_scores.append(raw[paper[0]]['rating_avg'])
+        ai_meta_decisions.append(ai_meta_decision)
 
-    # save to excel
-    df.to_excel('cache/NeurIPS2022_judge.xlsx', index=False)
-    print()
+    df.to_excel(dst_path, index=False)
+
+    # compute the accuracy
+    acc = sum([1 if x == y else 0 for x, y in zip(human_meta_decisions, ai_meta_decisions)]) / len(human_meta_decisions)
+    # acc_accept considers the case that both human and AI accept the paper
+    accept_nb = sum([1 if x == 'Accept' else 0 for x in human_meta_decisions])
+    reject_nb = sum([1 if x == 'Reject' else 0 for x in human_meta_decisions])
+    acc_accept = sum(
+        [1 if x == y == 'Accept' else 0 for x, y in zip(human_meta_decisions, ai_meta_decisions)]) / accept_nb
+    acc_reject = sum(
+        [1 if x == y == 'Reject' else 0 for x, y in zip(human_meta_decisions, ai_meta_decisions)]) / reject_nb
+    print('Accuracy: {}'.format(acc))
+    print('Accuracy of Accept: {}'.format(acc_accept))
+    print('Accuracy of Reject: {}'.format(acc_reject))
+
+    # make a histogram, ranging score from 0 to 10, check whether the AI judge is similar to the human judge
+    human_score2decision = zip(human_avg_scores, human_meta_decisions)
+    human_score2decision = sorted(human_score2decision, key=lambda x: x[0])
+    human_score2decision = list(human_score2decision)
+    ai_score2decision = zip(human_avg_scores, ai_meta_decisions)
+    ai_score2decision = sorted(ai_score2decision, key=lambda x: x[0])
+    ai_score2decision = list(ai_score2decision)
+    import matplotlib.pyplot as plt
+
+    decisions = ['Accept', 'Reject']
+    colors = ['tab:blue', 'tab:orange']
+
+    for decision, color in zip(decisions, colors):
+        human_scores = np.array([x[0] for x in human_score2decision if x[1] == decision])
+        ai_scores = np.array([x[0] for x in ai_score2decision if x[1] == decision])
+
+        # Calculate mean and confidence interval for each group
+        ai_mean = np.mean(ai_scores)
+        ai_ci = stats.norm.interval(0.95, loc=ai_mean, scale=stats.sem(ai_scores))
+
+        human_mean = np.mean(human_scores)
+        human_ci = stats.norm.interval(0.95, loc=human_mean, scale=stats.sem(human_scores))
+
+        # Create the histogram with bins of width 0.3
+        bins = np.arange(0, 11.3, 0.3)  # Bins from 0.0 to 11.0 with 0.3 intervals
+
+        ai_density = plt.hist(ai_scores, bins=bins, alpha=0.3, color=color, label='AI', density=False)
+        human_density = plt.hist(human_scores, bins=bins, alpha=0.3, color='gray', label='Human', density=False,
+                                 hatch='//')
+
+        plt.axvline(ai_mean, color=color, linestyle='dashed', linewidth=1)
+        plt.axvline(human_mean, color='gray', linestyle='dashed', linewidth=1)
+
+        plt.text(ai_mean - 0.2, 0.8 * ai_density[0].max(), f'{ai_mean:.2f}    \n[{ai_ci[0]:.2f}, {ai_ci[1]:.2f}]    ',
+                 color=color, ha='right')
+        plt.text(human_mean + 0.2, 0.8 * ai_density[0].max(),
+                 f'{human_mean:.1f}    \n[{human_ci[0]:.2f}, {human_ci[1]:.2f}]    ', color='gray')
+
+        plt.legend(loc='upper right')
+        plt.title(
+            f'Histogram of {decision}ed Papers Distribution' + "" if "confidence_Certain" not in name else " (Confidence: Certain)")
+        plt.xlabel('Reviewer Average Score')
+        plt.ylabel('Paper Number')
+
+        # Save and display the histogram
+        plt.savefig(dst_path.parent / f'histogram_{decision}_{src_path.stem}.png', dpi=300, bbox_inches='tight')
+        plt.show()
+
+        print()
 
 
 if __name__ == '__main__':
-    # generate_review()
-    ai_judge()
-    generate_human_review()
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k')
+    # generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', confidence='Certain')
+    ai_judge(col='ai_sum_meta')
+    analysis(name='gen_gpt-3.5-turbo-16k.json')
