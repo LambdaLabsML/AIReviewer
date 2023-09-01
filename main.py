@@ -179,9 +179,9 @@ def generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=None, 
         dst_path = dst_path.parent / (dst_path.stem + '_strictness_{}.json'.format(strictness))
 
     if confidence is not None and confidence.lower() == 'certain':
-        confidence_words = f"""Your confidence for this conference is "{confidence}", you should be more confident to give a final decision."""
+        confidence_words = f"""Your confidence for this conference is "Certain", you should be more confident to give a final decision."""
         prompt_template += confidence_words
-        dst_path = dst_path.parent / (dst_path.stem + '_confidence_{}.json'.format(confidence))
+        dst_path = dst_path.parent / (dst_path.stem + '_{}.json'.format(confidence))
 
     if not score:
         dst_path = dst_path.parent / (dst_path.stem + '_NoScore.json')
@@ -328,6 +328,8 @@ def analysis(name):
     :return:
     """
 
+    print('Analysis of {}'.format(name))
+
     src_path = Path('cache') / name
     dst_path = Path('cache') / 'analysis_{}.xlsx'.format(src_path.stem)
 
@@ -418,6 +420,8 @@ def analysis(name):
     decisions = ['Accept', 'Reject']
     colors = ['tab:blue', 'tab:orange']
 
+    res = {}
+
     for decision, color in zip(decisions, colors):
         human_scores = np.array([x[0] for x in human_score2decision if x[1] == decision])
         ai_scores = np.array([x[0] for x in ai_score2decision if x[1] == decision])
@@ -446,19 +450,72 @@ def analysis(name):
 
         plt.legend(loc='upper right')
         plt.title(
-            f'Histogram of {decision}ed Papers Distribution' + "" if "confidence_Certain" not in name else " (Confidence: Certain)")
+            f'Histogram of {decision}ing Papers' + "" if "confidence_Certain" not in name else " (Confidence: Certain)")
         plt.xlabel('Reviewer Average Score')
         plt.ylabel('Paper Number')
+
+        # KL divergence
+        from scipy.stats import entropy
+        prob_human = human_density[0] / human_density[0].sum()
+        prob_ai = ai_density[0] / ai_density[0].sum()
+        # replace 0 with small value
+        prob_human[prob_human == 0] = 1e-10
+        prob_ai[prob_ai == 0] = 1e-10
+        # # remove the zero values
+        # prob_human = prob_human[prob_human != 0]
+        # prob_ai = prob_ai[prob_ai != 0]
+        # # padding
+        # max_length
+        kl_divergence = entropy(prob_human, prob_ai, base=2)
+        print(f'KL divergence of {decision}ed papers: {kl_divergence:.2f}')
 
         # Save and display the histogram
         plt.savefig(dst_path.parent / f'histogram_{decision}_{src_path.stem}.png', dpi=300, bbox_inches='tight')
         plt.show()
 
-        print()
+        res[decision] = {
+            'acc': acc,
+            'acc_accept': acc_accept,
+            'acc_reject': acc_reject,
+            'kl_divergence': kl_divergence
+        }
+
+    return res
 
 
 if __name__ == '__main__':
     generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k')
-    # generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', confidence='Certain')
-    ai_judge(col='ai_sum_meta')
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', confidence='Certain')
+
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.9)
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.9, confidence='Certain')
+
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.5)
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.5, confidence='Certain')
+
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.3)
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.3, confidence='Certain')
+
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=1.0)
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=1.0, confidence='Certain')
+
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', score=False)
+    generate_meta_from_reviews(model_name='gpt-3.5-turbo-16k', strictness=0.9, score=False)
+
     analysis(name='gen_gpt-3.5-turbo-16k.json')
+    analysis(name='gen_gpt-3.5-turbo-16k_certain.json')
+
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_0.9.json')
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_0.9_certain.json')
+
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_0.5.json')
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_0.5_certain.json')
+
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_0.3.json')
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_0.3_certain.json')
+
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_1.0.json')
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_1.0_certain.json')
+
+    analysis(name='gen_gpt-3.5-turbo-16k_NoScore.json')
+    analysis(name='gen_gpt-3.5-turbo-16k_strictness_0.9_NoScore.json')
