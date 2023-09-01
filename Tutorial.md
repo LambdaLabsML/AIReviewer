@@ -8,7 +8,7 @@ Our findings are:
 
 - GPT is able to generate useful review summaries and "better than chance" accept/reject recommandations.
 - GPT has a strong hesitancy to advise rejection.
-- Several attributes, such as "certainty" and "human raiting", can have directive impact on AI's recommendation.
+- Several attributes, such as "strictness", "certainty" and "human ratings", can have directive impact on AI's recommendation.
 
 ### Background: Paper Reviews
 
@@ -41,12 +41,11 @@ The meta review gives the final decision, which can be "accept" or "reject." Sim
 >
 > The paper will have greater influence if the final version can convince readers of its relevance to ML!
 
-The following sections explain our experiments by crafting a AI meta reviewer followed by analysis of what elements contribute to the trend of AI decision.
+The subsequent sections delineate our experimentation process in creating an AI meta reviewer, succeeded by an analysis that delves into the factors influencing the trajectory of AI decisions.
 
 ## The Initial Attempt: AI as Meta Reviewer
 
 The initial stage of our experiment involved deploying the AI as a 'Meta Reviewer', utilizing the General Reviews as input and generating formatted Meta Reviews as output.
-
 Our AI's output was tailored to match the conference guidelines: it expressed its level of confidence in the decision (ranging from high to lower confidence), delivered a recommendation (either Accept or Reject), and substantiated the recommendation with an explanation.
 
 ### Approach
