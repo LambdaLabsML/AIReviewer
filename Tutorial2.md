@@ -35,12 +35,19 @@ According to OpenAI's best practice on [Tactic: Instruct the model to work out i
 A sample results for a paper review explanation is as follows:
 
 > Similarities:
+>
 > (Novelty): Both reviewers acknowledge the novelty of the paper's approach to solving statistical inverse problems using stochastic gradient descent.
+>
 > (Soundness): Both reviewers agree on the technical strength of the paper, with clear examples and mathematical exposition.
+>
 > (Relevance): Both reviewers express concern about the paper's relevance to a broader machine learning audience and suggest that the authors emphasize this more in their revision.
+>
 > Differences:
+>
 > (Presentation): The human reviewer suggests that the authors mention machine learning applications of their method early in the paper to pique reader interest, while the AI reviewer does not make this specific suggestion.
+>
 > (Strengths and Weaknesses): The AI reviewer mentions concerns about the completeness and consistency of the experimental results, which the human reviewer does not mention.
+>
 > (Confidence): The human reviewer is certain about their recommendation to accept the paper, while the AI reviewer is less certain due to the concerns raised by the reviewers and the need for further clarification on the limitations and advantages of the proposed method.
 
 We can see the format has constrained the AI to have structured outputs, which is the clear aspects highlighting the keypoints where the human and AI's review agree or differ. 
