@@ -30,7 +30,7 @@ Our initial approach, following OpenAI's best practices: [Tactic: Instruct the m
 
 The workflow for this step is illustrated below, with the AI explainer extracting key aspects from each paper's reviews, assessing whether there is agreement or disagreement between the human and AI perspective
 
-![t2 - step1](cache/t2 - step1.png)
+![img.png](img.png)![t2 - step1](cache/t2 - step1.png)
 
 
 
@@ -74,7 +74,7 @@ To gain deeper insights into the aspects on which human and AI reviewers concur 
 >
 > Explain what can you find worth mentioning from these information. Give discussion in a higher level, do not mention method/paper details. The output format should be point by point.
 
-![t2 - step2](cache/t2 - step2.png)
+![img_1.png](img_1.png)![t2 - step2](cache/t2 - step2.png)
 
 #### Results on Aspects of Similar Viewpoints
 
